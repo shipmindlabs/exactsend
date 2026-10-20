@@ -1,0 +1,42 @@
+{
+  "name": "exactsend",
+  "version": "0.1.0",
+  "description": "Human approval for an AI assistant's outbound actions, bound to the exact bytes sent to the provider.",
+  "license": "MIT",
+  "author": "Shipmind Labs <hello@shipmindlabs.com>",
+  "homepage": "https://shipmindlabs.com",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/shipmindlabs/exactsend.git"
+  },
+  "bugs": {
+    "url": "https://github.com/shipmindlabs/exactsend/issues"
+  },
+  "keywords": [
+    "approval",
+    "canonical",
+    "digest",
+    "sha-256",
+    "agent-safety"
+  ],
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "files": [
+    "src",
+    "README.md",
+    "LICENSE"
+  ],
+  "engines": {
+    "node": ">=22.18"
+  },
+  "scripts": {
+    "typecheck": "tsc",
+    "test": "node --test test/*.test.ts"
+  },
+  "devDependencies": {
+    "@types/node": "^22.18.0",
+    "typescript": "^5.9.2"
+  }
+}
