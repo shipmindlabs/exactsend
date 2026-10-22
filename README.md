@@ -10,8 +10,8 @@ rest of the flow refers to that digest.
 
 ## Status
 
-This phase ships the action digest only. Approvals, expiry, the second-human rule and provider
-reconciliation are not implemented yet.
+This phase ships the action digest and the action type registry. Approvals, expiry, the
+second-human rule and provider reconciliation are not implemented yet.
 
 ## Usage
 
@@ -63,6 +63,71 @@ Refusals throw `CanonicalError` with a `code` and the `path` of the offending va
 
 The lone surrogate case is the subtle one: `TextEncoder` silently turns an unpaired surrogate into
 U+FFFD, so two different strings would otherwise share a digest.
+
+## Action types
+
+An action type exists because code registers it, never because configuration mentions it.
+
+```ts
+import { defineActionType, Registry } from 'exactsend';
+
+const emailSend = defineActionType({
+  name: 'email.send',
+  reversible: false,
+  ttlMs: 10 * 60_000,
+  maxWindowMs: 60 * 60_000,
+  approverRoles: ['ops-lead', 'finance'],
+  maxBatch: 5,
+  adapter: emailAdapter,
+});
+
+const registry = new Registry([emailSend]);
+```
+
+Every registered type requires approval. `reversible` says only whether a sent action can be taken
+back, which later phases use to decide how hard reconciliation has to work.
+
+A name nobody registered has no policy to read, so it reads as its own worst case, and there is no
+adapter to run it with:
+
+```ts
+registry.policyFor('email.sned');
+// { registered: false, reversible: false, approvalRequired: true, executable: false, ... }
+
+registry.adapterFor('email.sned'); // RegistryError: unknown-action-type
+```
+
+### Overrides may only tighten
+
+`applyPolicyOverrides` takes parsed JSON against a closed schema — `ttlMs`, `approverRoles` and
+`maxBatch` per registered type — and returns a new registry. Nothing else is accepted, so
+configuration can never name a command, a module or a path:
+
+```ts
+const tightened = registry.applyPolicyOverrides({
+  'email.send': { ttlMs: 60_000, approverRoles: ['finance'], maxBatch: 2 },
+});
+```
+
+A longer TTL, an added role, a larger batch or a `reversible` flag are refused rather than applied.
+
+### Registry refusals
+
+Refusals throw `RegistryError` with a `code` and the `path` of the offending value.
+
+| code | refused |
+| --- | --- |
+| `duplicate-action-type` | two definitions registering the same name |
+| `invalid-action-type` | a definition whose own fields do not hold together |
+| `unknown-action-type` | resolving an adapter for a name no code registers |
+| `invalid-overrides` | overrides that are not a JSON object of type names |
+| `unknown-override-type` | an override for a name that is not registered |
+| `unknown-override-key` | any key outside `ttlMs`, `approverRoles`, `maxBatch` |
+| `reversible-not-overridable` | a `reversible` flag in configuration |
+| `invalid-override-value` | a value of the wrong type or outside its range |
+| `ttl-not-tightened` | a TTL longer than the registered one |
+| `role-not-registered` | an approver role the code never registered |
+| `batch-not-tightened` | a batch larger than the registered one |
 
 ## Development
 
