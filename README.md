@@ -10,8 +10,9 @@ rest of the flow refers to that digest.
 
 ## Status
 
-This phase ships the action digest and the action type registry. Approvals, expiry, the
-second-human rule and provider reconciliation are not implemented yet.
+This phase ships the action digest, the action type registry and proposals that hold the rendered
+wire bytes. Approvals, expiry, the second-human rule and provider reconciliation are not
+implemented yet.
 
 ## Usage
 
@@ -128,6 +129,56 @@ Refusals throw `RegistryError` with a `code` and the `path` of the offending val
 | `ttl-not-tightened` | a TTL longer than the registered one |
 | `role-not-registered` | an approver role the code never registered |
 | `batch-not-tightened` | a batch larger than the registered one |
+
+## Proposals
+
+A proposal is a rendered action, not a draft. `propose` asks the type's adapter to render the final
+bytes the provider will receive — template, signature, unsubscribe footer, rewritten links — and
+stores them as revision 1. An adapter therefore implements `render(request)` next to `send(action)`.
+
+```ts
+import { ProposalStore } from 'exactsend';
+
+const proposals = new ProposalStore(registry);
+
+const proposal = await proposals.propose({
+  type: 'email.send',
+  target: 'ops@example.com',
+  draft: { subject: 'Invoice 41', body: 'Attached.' },
+  attachments: [{ filename: 'invoice-41.pdf', bytes: pdf }],
+  window: { notBefore: Date.now(), notAfter: Date.now() + 15 * 60_000 },
+  proposer: 'assistant-7',
+});
+
+const [revision] = proposal.revisions;
+revision.payload; // the exact bytes that will go out
+revision.digest; // what an approver will be approving
+```
+
+The digest covers the type, the target, the SHA-256 of the payload bytes, the attachment SHA-256
+values in their order, and the window `{ notBefore, notAfter }`. It does not cover the draft: a
+footer the adapter adds is part of what gets approved, and two renders of the same draft digest the
+same. A window wider than the type's `maxWindowMs` is refused rather than clamped.
+
+`edit(proposalId, draft)` and `reschedule(proposalId, window)` re-render and append revision n+1
+with its own digest. An earlier revision is never mutated, so an approval of revision 1 can never be
+read as an approval of revision 2.
+
+### Proposal refusals
+
+Refusals throw `ProposalError` with a `code` and the `path` of the offending value.
+
+| code | refused |
+| --- | --- |
+| `unknown-proposal` | an id no proposal has |
+| `invalid-target` | a target that is not a non-empty string |
+| `invalid-proposer` | a proposer that is not a non-empty string |
+| `invalid-draft` | a draft that is not a plain object |
+| `invalid-attachment` | an attachment without a filename or without `Uint8Array` bytes |
+| `invalid-window` | a window outside `{ notBefore, notAfter }`, out of order, or not epoch milliseconds |
+| `window-too-wide` | a window wider than the type's `maxWindowMs` |
+| `adapter-cannot-render` | an adapter with no `render`, so there are no bytes to approve |
+| `invalid-payload` | a `render` that returns something other than `Uint8Array` |
 
 ## Development
 
