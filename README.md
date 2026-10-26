@@ -10,9 +10,9 @@ rest of the flow refers to that digest.
 
 ## Status
 
-This phase ships the action digest, the action type registry and proposals that hold the rendered
-wire bytes. Approvals, expiry, the second-human rule and provider reconciliation are not
-implemented yet.
+This phase ships the action digest, the action type registry, proposals that hold the rendered wire
+bytes and the approval decision itself. Single-use enforcement, expiry checked at execution time
+and provider reconciliation are not implemented yet.
 
 ## Usage
 
@@ -179,6 +179,50 @@ Refusals throw `ProposalError` with a `code` and the `path` of the offending val
 | `window-too-wide` | a window wider than the type's `maxWindowMs` |
 | `adapter-cannot-render` | an adapter with no `render`, so there are no bytes to approve |
 | `invalid-payload` | a `render` that returns something other than `Uint8Array` |
+
+## Approvals
+
+An approval is a decision by a human other than the proposer, holding a role the action type
+allows, over the digest of one revision.
+
+```ts
+import { ApprovalDesk } from 'exactsend';
+
+const desk = new ApprovalDesk(registry, proposals);
+const revision = proposals.latestRevision(proposal.id);
+
+const approval = desk.approve({
+  proposalId: proposal.id,
+  revision: revision.number,
+  digest: revision.digest,
+  approver: { id: 'dana', kind: 'human', roles: ['ops-lead'] },
+});
+
+approval.approver; // 'dana'
+approval.decidedAt; // read from the clock the desk was built with
+approval.expiresAt; // decidedAt + the type's ttlMs
+```
+
+The submitted digest has to be the digest of that revision, so a reviewer approves what they saw: a
+digest from revision 1 does not approve revision 2, and an edit that lands between reading and
+deciding is refused instead of being carried over.
+
+An approver whose kind is `agent` is refused, and no option relaxes that. The proposer cannot
+approve their own proposal even while holding an allowed role. A desk takes its clock as
+`new ApprovalDesk(registry, proposals, { now })`, so expiry is testable.
+
+### Approval refusals
+
+Refusals throw `ApprovalError` with a `code` and the `path` of the offending value.
+
+| code | refused |
+| --- | --- |
+| `invalid-approver` | an approver without an id, a known kind or a list of roles |
+| `unknown-revision` | a revision number this proposal does not have |
+| `agent-approver` | an approver whose kind is `agent` |
+| `self-approval` | an approver whose id is the proposer |
+| `role-not-allowed` | an approver holding none of the type's `approverRoles` |
+| `stale-digest` | a digest that is not the digest of that revision |
 
 ## Development
 

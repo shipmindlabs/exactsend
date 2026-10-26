@@ -1,3 +1,12 @@
+export { ApprovalDesk, ApprovalError } from './approve.ts';
+export type {
+  Approval,
+  ApprovalDeskOptions,
+  ApprovalErrorCode,
+  ApprovalRequest,
+  Principal,
+  PrincipalKind,
+} from './approve.ts';
 export { actionDigest, canonicalBytes, CanonicalError } from './canonical.ts';
 export type { CanonicalErrorCode } from './canonical.ts';
 export { ProposalError, ProposalStore } from './proposal.ts';
