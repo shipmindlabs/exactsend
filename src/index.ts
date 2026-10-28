@@ -9,6 +9,8 @@ export type {
 } from './approve.ts';
 export { actionDigest, canonicalBytes, CanonicalError } from './canonical.ts';
 export type { CanonicalErrorCode } from './canonical.ts';
+export { ExecuteError, Executor } from './execute.ts';
+export type { ExecuteErrorCode, ExecutorOptions } from './execute.ts';
 export { ProposalError, ProposalStore } from './proposal.ts';
 export type {
   ActionRenderer,
@@ -31,3 +33,13 @@ export type {
   ActionTypeSpec,
   RegistryErrorCode,
 } from './registry.ts';
+export { MemoryApprovalStore } from './store/memory.ts';
+export { StoreError } from './store/port.ts';
+export type {
+  ApprovalRecord,
+  ApprovalStore,
+  DispatchResult,
+  ExecutionRecord,
+  ExecutionState,
+  StoreErrorCode,
+} from './store/port.ts';

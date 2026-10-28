@@ -11,8 +11,8 @@ rest of the flow refers to that digest.
 ## Status
 
 This phase ships the action digest, the action type registry, proposals that hold the rendered wire
-bytes and the approval decision itself. Single-use enforcement, expiry checked at execution time
-and provider reconciliation are not implemented yet.
+bytes, the approval decision itself, and single-use consumption at execution time. Reconciliation
+with the provider before a retry is not implemented yet.
 
 ## Usage
 
@@ -223,6 +223,58 @@ Refusals throw `ApprovalError` with a `code` and the `path` of the offending val
 | `self-approval` | an approver whose id is the proposer |
 | `role-not-allowed` | an approver holding none of the type's `approverRoles` |
 | `stale-digest` | a digest that is not the digest of that revision |
+
+## Execution
+
+An approval buys one send. `execute(approvalId)` reads the recorded approval, checks that it has not
+expired and that the clock is inside the approved revision's window, and only then consumes it.
+
+`ApprovalStore.consumeAndRecordIntent(approvalId, executionKey, now)` is the single step that makes
+the send legitimate: it marks the approval consumed only where it was not already consumed, and
+writes an execution row in state `dispatching` with it. If no row changed, the approval was already
+spent, so `execute` refuses `already-consumed` and the provider is never called. Two concurrent
+calls on one approval therefore give one send and one refusal.
+
+```ts
+import { Executor, MemoryApprovalStore } from 'exactsend';
+
+const store = new MemoryApprovalStore();
+const { approvalId } = await store.recordApproval(approval);
+
+const executor = new Executor(registry, proposals, store);
+const execution = await executor.execute(approvalId);
+
+execution.executionKey; // the key the provider call carried, stable for reconciliation
+execution.state; // 'sent' or 'failed'
+execution.providerRef; // whatever the adapter returned to name the send
+```
+
+The adapter's `send` receives the approved bytes, their digest and the `executionKey`, so a provider
+that accepts an idempotency key can be given one.
+
+The send itself is not atomic with the store. The provider call happens after that commit, and its
+result is written as a second step, so a crash in between leaves a row in `dispatching` — the honest
+state, because the bytes may or may not be on the wire and only reconciliation with the provider can
+tell. A provider error is recorded as `failed` for the same reason instead of being thrown back as
+something to retry: the approval stays consumed.
+
+`ApprovalStore` is a port; `MemoryApprovalStore` is the implementation this phase ships. A store
+backed by a database has to keep `consumeAndRecordIntent` one transaction for any of this to hold.
+
+### Execution refusals
+
+Refusals throw `ExecuteError` with a `code` and the `path` of the offending value.
+
+| code | refused |
+| --- | --- |
+| `approval-expired` | an approval whose `expiresAt` has passed |
+| `outside-window` | a clock outside the approved revision's window |
+| `already-consumed` | an approval an execution already spent |
+| `unknown-revision` | an approval naming a revision the proposal does not hold |
+
+The store refuses with `StoreError`: `unknown-approval` for an id it does not hold,
+`unknown-execution` for an unknown execution key, and `duplicate-execution-key` for a key it has
+already written.
 
 ## Development
 
