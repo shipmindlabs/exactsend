@@ -43,3 +43,4 @@ export type {
   ExecutionState,
   StoreErrorCode,
 } from './store/port.ts';
+export { SqliteApprovalStore } from './store/sqlite.ts';
