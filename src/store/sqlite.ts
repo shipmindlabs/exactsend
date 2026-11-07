@@ -156,19 +156,19 @@ export class SqliteApprovalStore implements ApprovalStore {
     now: number,
   ): Promise<ExecutionRecord | null> {
     const approval = await this.getApproval(approvalId);
-    const taken = this.#db
-      .prepare('SELECT 1 FROM executions WHERE execution_key = ?')
-      .get(executionKey);
-    if (taken !== undefined) {
-      throw new StoreError(
-        'duplicate-execution-key',
-        executionKey,
-        'an execution with this key is already recorded',
-      );
-    }
-
-    this.#db.exec('BEGIN IMMEDIATE');
-    try {
+    // BEGIN IMMEDIATE takes the write lock before the first read, so no other connection
+    // can claim this execution key or this approval between the check and the insert.
+    const claimed = transaction(this.#db, () => {
+      const taken = this.#db
+        .prepare('SELECT 1 FROM executions WHERE execution_key = ?')
+        .get(executionKey);
+      if (taken !== undefined) {
+        throw new StoreError(
+          'duplicate-execution-key',
+          executionKey,
+          'an execution with this key is already recorded',
+        );
+      }
       const consumed = this.#db
         .prepare(
           `UPDATE approvals SET consumed_at = ?, execution_key = ?
@@ -176,8 +176,7 @@ export class SqliteApprovalStore implements ApprovalStore {
         )
         .run(now, executionKey, approvalId);
       if (Number(consumed.changes) !== 1) {
-        this.#db.exec('ROLLBACK');
-        return null;
+        return false;
       }
       this.#db
         .prepare(
@@ -187,12 +186,9 @@ export class SqliteApprovalStore implements ApprovalStore {
            VALUES (?, ?, ?, 'dispatching', ?, NULL, NULL, NULL)`,
         )
         .run(executionKey, approvalId, approval.digest, now);
-      this.#db.exec('COMMIT');
-    } catch (error) {
-      this.#db.exec('ROLLBACK');
-      throw error;
-    }
-    return await this.getExecution(executionKey);
+      return true;
+    });
+    return claimed ? await this.getExecution(executionKey) : null;
   }
 
   async recordDispatchResult(
@@ -243,6 +239,19 @@ export class SqliteApprovalStore implements ApprovalStore {
   }
 }
 
+function transaction<T>(db: DatabaseSync, run: () => T): T {
+  db.exec('BEGIN IMMEDIATE');
+  let value: T;
+  try {
+    value = run();
+  } catch (error) {
+    db.exec('ROLLBACK');
+    throw error;
+  }
+  db.exec('COMMIT');
+  return value;
+}
+
 function migrate(db: DatabaseSync): void {
   db.exec(
     `CREATE TABLE IF NOT EXISTS migrations (
@@ -257,17 +266,12 @@ function migrate(db: DatabaseSync): void {
     if (applied.get(migration.number) !== undefined) {
       continue;
     }
-    db.exec('BEGIN IMMEDIATE');
-    try {
+    transaction(db, () => {
       for (const statement of migration.statements) {
         db.exec(statement);
       }
       record.run(migration.number, Date.now());
-      db.exec('COMMIT');
-    } catch (error) {
-      db.exec('ROLLBACK');
-      throw error;
-    }
+    });
   }
 }
 

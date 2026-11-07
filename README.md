@@ -11,8 +11,8 @@ rest of the flow refers to that digest.
 ## Status
 
 This phase ships the action digest, the action type registry, proposals that hold the rendered wire
-bytes, the approval decision itself, and single-use consumption at execution time. Reconciliation
-with the provider before a retry is not implemented yet.
+bytes, the approval decision itself, and single-use consumption at execution time, in memory or on
+`node:sqlite`. Reconciliation with the provider before a retry is not implemented yet.
 
 ## Usage
 
@@ -258,8 +258,30 @@ state, because the bytes may or may not be on the wire and only reconciliation w
 tell. A provider error is recorded as `failed` for the same reason instead of being thrown back as
 something to retry: the approval stays consumed.
 
-`ApprovalStore` is a port; `MemoryApprovalStore` is the implementation this phase ships. A store
-backed by a database has to keep `consumeAndRecordIntent` one transaction for any of this to hold.
+### Stores
+
+`ApprovalStore` is a port with two implementations, and one contract suite holds both to the same
+behaviour. `MemoryApprovalStore` keeps everything in process. `SqliteApprovalStore` persists through
+the built-in `node:sqlite` module, so durability costs no runtime dependency:
+
+```ts
+import { Executor, SqliteApprovalStore } from 'exactsend';
+
+const store = new SqliteApprovalStore('approvals.db'); // ':memory:' when no path is given
+// ... same Executor, same contract
+store.close();
+```
+
+A numbered migration creates `proposals`, `revisions`, `approvals`, `executions` and `blockers`, and
+records itself in a `migrations` table, so reopening a file applies nothing twice. This phase writes
+approvals and executions only; the other tables are there for the proposals and the reconciliation
+that later phases persist.
+
+Consumption is one `BEGIN IMMEDIATE` transaction: the `UPDATE` that marks the approval consumed has
+to change exactly one row, the execution row is inserted with it, and any error rolls the whole
+transaction back. Taking the write lock before the first read is what makes check-then-write safe
+across connections, so two processes on one database file still get one send and one
+`already-consumed`.
 
 ### Execution refusals
 
