@@ -1,3 +1,24 @@
+export { emailAdapter, FakeEmailProvider } from './adapters/email.ts';
+export type {
+  DeliveredEmail,
+  EmailAdapter,
+  EmailAdapterOptions,
+  EmailProvider,
+  EmailTemplate,
+} from './adapters/email.ts';
+export type {
+  Adapter,
+  ProviderState,
+  ProviderStatus,
+  SendContext,
+} from './adapters/types.ts';
+export { WebhookAdapter } from './adapters/webhook.ts';
+export type {
+  WebhookAdapterOptions,
+  WebhookFetch,
+  WebhookRequest,
+  WebhookResponse,
+} from './adapters/webhook.ts';
 export { ApprovalDesk, ApprovalError } from './approve.ts';
 export type {
   Approval,
