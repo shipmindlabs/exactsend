@@ -6,10 +6,12 @@ export type {
   EmailProvider,
   EmailTemplate,
 } from './adapters/email.ts';
+export { actionAdapter } from './adapters/types.ts';
 export type {
   Adapter,
   ProviderState,
   ProviderStatus,
+  RegisteredAdapter,
   SendContext,
 } from './adapters/types.ts';
 export { WebhookAdapter } from './adapters/webhook.ts';
@@ -42,6 +44,7 @@ export type {
   ProposalErrorCode,
   ProposalInput,
   ProposalStoreOptions,
+  RenderedRevision,
   RenderRequest,
   Revision,
   RevisionReason,

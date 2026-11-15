@@ -5,6 +5,7 @@ import type { ApprovalStore, DispatchResult, ExecutionRecord } from './store/por
 export type ExecuteErrorCode =
   | 'approval-expired'
   | 'outside-window'
+  | 'render-drift'
   | 'already-consumed'
   | 'unknown-revision';
 
@@ -64,6 +65,17 @@ export class Executor {
       );
     }
 
+    // Rendering again before consuming: a template, footer or link rewrite that moved since
+    // the decision renders to another digest, and that digest was never approved.
+    const rendered = await this.#proposals.rerender(proposal.id, revision.number);
+    if (rendered.digest !== approval.digest) {
+      throw new ExecuteError(
+        'render-drift',
+        approvalId,
+        `the draft now renders as ${rendered.digest}, not the approved ${approval.digest}`,
+      );
+    }
+
     const intent = await this.#store.consumeAndRecordIntent(
       approvalId,
       crypto.randomUUID(),
@@ -79,6 +91,7 @@ export class Executor {
 
     let result: DispatchResult;
     try {
+      // The stored bytes, not the ones just rendered: the approver's bytes go on the wire.
       const sent: unknown = await adapter.send({
         type: proposal.type,
         target: proposal.target,

@@ -3,6 +3,7 @@ import type { Registry } from './registry.ts';
 
 export type ProposalErrorCode =
   | 'unknown-proposal'
+  | 'unknown-revision'
   | 'invalid-target'
   | 'invalid-proposer'
   | 'invalid-draft'
@@ -63,6 +64,12 @@ export interface Revision {
   readonly window: ApprovalWindow;
   readonly draft: Record<string, unknown>;
   readonly createdAt: number;
+}
+
+export interface RenderedRevision {
+  readonly payload: Uint8Array;
+  readonly payloadSha256: string;
+  readonly digest: string;
 }
 
 export interface Proposal {
@@ -144,6 +151,25 @@ export class ProposalStore {
     return await this.#append(record, renderer, 'rescheduled', draft, next);
   }
 
+  // What the adapter renders for this revision now. The approved digest is only still true
+  // if this reproduces it, so nothing stored is touched here.
+  async rerender(proposalId: string, revisionNumber: number): Promise<RenderedRevision> {
+    const record = this.#record(proposalId);
+    const revision = this.#revision(record, revisionNumber);
+    const payload = await renderPayload(this.#rendererFor(record.type), {
+      type: record.type,
+      target: record.target,
+      draft: revision.draft,
+      attachments: record.attachments,
+    });
+    const payloadSha256 = await sha256Hex(payload);
+    return Object.freeze({
+      payload,
+      payloadSha256,
+      digest: await digestFor(record, payloadSha256, revision.window),
+    });
+  }
+
   get(proposalId: string): Proposal {
     return view(this.#record(proposalId));
   }
@@ -166,13 +192,7 @@ export class ProposalStore {
       attachments: record.attachments,
     });
     const payloadSha256 = await sha256Hex(payload);
-    const digest = await actionDigest({
-      type: record.type,
-      target: record.target,
-      payloadSha256,
-      attachments: record.attachmentRecords.map((attachment) => attachment.sha256),
-      window: { notBefore: window.notBefore, notAfter: window.notAfter },
-    });
+    const digest = await digestFor(record, payloadSha256, window);
 
     record.revisions.push(
       Object.freeze({
@@ -214,9 +234,36 @@ export class ProposalStore {
     return record;
   }
 
+  #revision(record: ProposalRecord, revisionNumber: number): Revision {
+    for (const revision of record.revisions) {
+      if (revision.number === revisionNumber) {
+        return revision;
+      }
+    }
+    throw new ProposalError(
+      'unknown-revision',
+      `${record.id}#${String(revisionNumber)}`,
+      'this proposal has no revision with that number',
+    );
+  }
+
   #latest(record: ProposalRecord): Revision {
     return record.revisions[record.revisions.length - 1]!;
   }
+}
+
+async function digestFor(
+  record: ProposalRecord,
+  payloadSha256: string,
+  window: ApprovalWindow,
+): Promise<string> {
+  return await actionDigest({
+    type: record.type,
+    target: record.target,
+    payloadSha256,
+    attachments: record.attachmentRecords.map((attachment) => attachment.sha256),
+    window: { notBefore: window.notBefore, notAfter: window.notAfter },
+  });
 }
 
 async function renderPayload(

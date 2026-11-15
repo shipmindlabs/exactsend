@@ -1,3 +1,6 @@
+import type { ActionRenderer, RenderRequest } from '../proposal.ts';
+import type { ActionAdapter } from '../registry.ts';
+
 export interface SendContext {
   readonly executionKey: string;
 }
@@ -19,4 +22,26 @@ export interface Adapter {
   send(bytes: Uint8Array, context: SendContext): Promise<string | null>;
 
   queryStatus?(executionKey: string): Promise<ProviderStatus>;
+}
+
+export interface RegisteredAdapter extends ActionAdapter, ActionRenderer {
+  readonly honoursIdempotencyKey: boolean;
+}
+
+// What the executor hands a registered adapter: the approved bytes of the revision and the
+// key the provider may deduplicate on.
+interface SendEnvelope {
+  readonly payload: Uint8Array;
+  readonly executionKey: string;
+}
+
+export function actionAdapter(adapter: Adapter): RegisteredAdapter {
+  return Object.freeze({
+    honoursIdempotencyKey: adapter.honoursIdempotencyKey,
+    render: (request: RenderRequest) => adapter.render(request.draft, request.target),
+    send: async (action: Record<string, unknown>) => {
+      const envelope = action as unknown as SendEnvelope;
+      return await adapter.send(envelope.payload, { executionKey: envelope.executionKey });
+    },
+  });
 }
