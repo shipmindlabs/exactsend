@@ -26,6 +26,8 @@ export interface Adapter {
 
 export interface RegisteredAdapter extends ActionAdapter, ActionRenderer {
   readonly honoursIdempotencyKey: boolean;
+
+  queryStatus?(executionKey: string): Promise<ProviderStatus>;
 }
 
 // What the executor hands a registered adapter: the approved bytes of the revision and the
@@ -35,13 +37,23 @@ interface SendEnvelope {
   readonly executionKey: string;
 }
 
+type MutableAdapter = {
+  -readonly [K in keyof RegisteredAdapter]: RegisteredAdapter[K];
+};
+
 export function actionAdapter(adapter: Adapter): RegisteredAdapter {
-  return Object.freeze({
+  const query = adapter.queryStatus;
+  const registered: MutableAdapter = {
     honoursIdempotencyKey: adapter.honoursIdempotencyKey,
     render: (request: RenderRequest) => adapter.render(request.draft, request.target),
     send: async (action: Record<string, unknown>) => {
       const envelope = action as unknown as SendEnvelope;
       return await adapter.send(envelope.payload, { executionKey: envelope.executionKey });
     },
-  });
+  };
+  if (query !== undefined) {
+    // Reconciliation has to be able to ask the provider, so the query survives registration.
+    registered.queryStatus = async (executionKey) => await query.call(adapter, executionKey);
+  }
+  return Object.freeze(registered);
 }

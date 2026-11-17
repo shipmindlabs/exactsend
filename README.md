@@ -11,8 +11,9 @@ rest of the flow refers to that digest.
 ## Status
 
 This phase ships the action digest, the action type registry, proposals that hold the rendered wire
-bytes, the approval decision itself, and single-use consumption at execution time, in memory or on
-`node:sqlite`. Reconciliation with the provider before a retry is not implemented yet.
+bytes, the approval decision itself, the adapters that render and send, and single-use consumption
+at execution time, in memory or on `node:sqlite`. Reconciliation with the provider before a retry is
+not implemented yet.
 
 ## Usage
 
@@ -130,6 +131,55 @@ Refusals throw `RegistryError` with a `code` and the `path` of the offending val
 | `role-not-registered` | an approver role the code never registered |
 | `batch-not-tightened` | a batch larger than the registered one |
 
+## Adapters
+
+An adapter owns both halves of one action type: it renders the bytes the provider will receive, and
+it sends exactly those bytes.
+
+```ts
+import { actionAdapter, emailAdapter, FakeEmailProvider } from 'exactsend';
+
+const provider = new FakeEmailProvider();
+const adapter = actionAdapter(emailAdapter({ provider }));
+// ... then defineActionType({ name: 'email.send', adapter, ... })
+```
+
+`Adapter` is the shape you write: `render(draft, target)`, `send(bytes, { executionKey })`, a
+`honoursIdempotencyKey` claim and an optional `queryStatus(executionKey)`. `actionAdapter` turns it
+into what the registry takes, so an adapter never has to know about revisions or approvals — it is
+handed the approved bytes and the key to send them under.
+
+`honoursIdempotencyKey` is a claim about the provider, not about the header: sending an
+`Idempotency-Key` is not the same as the endpoint deduplicating on it, so the claim belongs to
+whoever knows the endpoint. Later phases read it to decide whether a retry under the same execution
+key is safe or has to be reconciled first. `queryStatus` answers `sent`, `not-sent` or `unknown`,
+and `unknown` is an honest answer a provider is allowed to give.
+
+`emailAdapter({ provider, template })` renders a template to UTF-8 bytes and delivers them with the
+execution key as the provider's idempotency key. `FakeEmailProvider` is that provider in memory: it
+keeps every delivery for a test to read, and answers a repeated key with the reference it already
+gave instead of delivering twice.
+
+`WebhookAdapter` is the generic one. It renders `{ target, draft }` as JSON with sorted keys, so two
+drafts differing only in key order render the same bytes and digest the same, and POSTs those bytes
+with `Content-Type: application/json` and `Idempotency-Key: <executionKey>` through an injected
+`fetch`. A response that is not `ok` throws, which the executor records as a failed execution.
+
+```ts
+import { WebhookAdapter } from 'exactsend';
+
+const hook = actionAdapter(
+  new WebhookAdapter({
+    url: 'https://example.com/hooks/send',
+    fetch: post, // (url, { method, headers, body }) => { ok, status, text() }
+    honoursIdempotencyKey: true,
+  }),
+);
+```
+
+Only email and webhooks ship here. A platform with its own approval semantics needs its own
+adapter, written where that platform is understood.
+
 ## Proposals
 
 A proposal is a rendered action, not a draft. `propose` asks the type's adapter to render the final
@@ -229,6 +279,12 @@ Refusals throw `ApprovalError` with a `code` and the `path` of the offending val
 An approval buys one send. `execute(approvalId)` reads the recorded approval, checks that it has not
 expired and that the clock is inside the approved revision's window, and only then consumes it.
 
+Before consuming, it has the adapter render the stored draft again. A template, footer or link
+rewrite that moved since the decision renders to another digest, and that digest was never
+approved, so `execute` refuses `render-drift`, the provider is never called and the approval stays
+unspent. When the render still reproduces the approved digest, the bytes stored with the revision go
+out — not the ones just rendered, which are the same bytes only as long as nothing drifted.
+
 `ApprovalStore.consumeAndRecordIntent(approvalId, executionKey, now)` is the single step that makes
 the send legitimate: it marks the approval consumed only where it was not already consumed, and
 writes an execution row in state `dispatching` with it. If no row changed, the approval was already
@@ -291,6 +347,7 @@ Refusals throw `ExecuteError` with a `code` and the `path` of the offending valu
 | --- | --- |
 | `approval-expired` | an approval whose `expiresAt` has passed |
 | `outside-window` | a clock outside the approved revision's window |
+| `render-drift` | a draft that no longer renders to the approved digest |
 | `already-consumed` | an approval an execution already spent |
 | `unknown-revision` | an approval naming a revision the proposal does not hold |
 

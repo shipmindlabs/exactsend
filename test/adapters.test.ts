@@ -97,6 +97,26 @@ test('the fake provider receives exactly the approved bytes', async () => {
   );
 });
 
+test('a registered adapter keeps its idempotency claim and its status query', async () => {
+  const provider = new FakeEmailProvider();
+  const adapter = actionAdapter(emailAdapter({ provider }));
+  const run = await flow(adapter);
+
+  const execution = await run.execute();
+
+  assert.equal(adapter.honoursIdempotencyKey, true);
+  const queryStatus = adapter.queryStatus;
+  assert.ok(queryStatus);
+  assert.deepEqual(await queryStatus(execution.executionKey), {
+    state: 'sent',
+    providerRef: 'fake-email-1',
+  });
+  assert.deepEqual(await queryStatus('a-key-nobody-sent'), {
+    state: 'not-sent',
+    providerRef: null,
+  });
+});
+
 test('a template changed after approval refuses the send', async () => {
   let trailer = '';
   const template: EmailTemplate = (draft, target) =>
