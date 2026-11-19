@@ -32,7 +32,7 @@ export type {
 } from './approve.ts';
 export { actionDigest, canonicalBytes, CanonicalError } from './canonical.ts';
 export type { CanonicalErrorCode } from './canonical.ts';
-export { ExecuteError, Executor } from './execute.ts';
+export { ExecuteError, executionKeyFor, Executor, SendTimeoutError } from './execute.ts';
 export type { ExecuteErrorCode, ExecutorOptions } from './execute.ts';
 export { ProposalError, ProposalStore } from './proposal.ts';
 export type {
@@ -63,6 +63,7 @@ export type {
   ApprovalRecord,
   ApprovalStore,
   DispatchResult,
+  ExecutionBlocker,
   ExecutionRecord,
   ExecutionState,
   StoreErrorCode,

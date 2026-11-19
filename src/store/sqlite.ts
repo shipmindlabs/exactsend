@@ -6,6 +6,7 @@ import {
   type ApprovalRecord,
   type ApprovalStore,
   type DispatchResult,
+  type ExecutionBlocker,
   type ExecutionRecord,
   type ExecutionState,
 } from './port.ts';
@@ -57,11 +58,14 @@ const MIGRATIONS: readonly Migration[] = [
          execution_key TEXT PRIMARY KEY,
          approval_id TEXT NOT NULL REFERENCES approvals(id),
          digest TEXT NOT NULL,
-         state TEXT NOT NULL CHECK (state IN ('dispatching', 'sent', 'failed')),
+         state TEXT NOT NULL CHECK (
+           state IN ('dispatching', 'sent', 'failed', 'unknown', 'delivered', 'parked')
+         ),
          started_at INTEGER NOT NULL,
          settled_at INTEGER,
          provider_ref TEXT,
-         failure TEXT
+         failure TEXT,
+         blocker TEXT
        ) STRICT`,
       `CREATE TABLE blockers (
          id TEXT PRIMARY KEY,
@@ -98,6 +102,7 @@ type ExecutionRow = {
   settled_at: number | null;
   provider_ref: string | null;
   failure: string | null;
+  blocker: string | null;
 };
 
 export class SqliteApprovalStore implements ApprovalStore {
@@ -159,6 +164,14 @@ export class SqliteApprovalStore implements ApprovalStore {
     // BEGIN IMMEDIATE takes the write lock before the first read, so no other connection
     // can claim this execution key or this approval between the check and the insert.
     const claimed = transaction(this.#db, () => {
+      // Consumption is read first: the key is derived from the approval, so a second
+      // attempt carries the key of the first one and has to read as already consumed.
+      const current = this.#db
+        .prepare('SELECT consumed_at FROM approvals WHERE id = ?')
+        .get(approvalId) as { consumed_at: number | null } | undefined;
+      if (current === undefined || current.consumed_at !== null) {
+        return false;
+      }
       const taken = this.#db
         .prepare('SELECT 1 FROM executions WHERE execution_key = ?')
         .get(executionKey);
@@ -182,8 +195,8 @@ export class SqliteApprovalStore implements ApprovalStore {
         .prepare(
           `INSERT INTO executions
              (execution_key, approval_id, digest, state, started_at, settled_at,
-              provider_ref, failure)
-           VALUES (?, ?, ?, 'dispatching', ?, NULL, NULL, NULL)`,
+              provider_ref, failure, blocker)
+           VALUES (?, ?, ?, 'dispatching', ?, NULL, NULL, NULL, NULL)`,
         )
         .run(executionKey, approvalId, approval.digest, now);
       return true;
@@ -197,7 +210,8 @@ export class SqliteApprovalStore implements ApprovalStore {
   ): Promise<ExecutionRecord> {
     const settled = this.#db
       .prepare(
-        `UPDATE executions SET state = ?, settled_at = ?, provider_ref = ?, failure = ?
+        `UPDATE executions
+         SET state = ?, settled_at = ?, provider_ref = ?, failure = ?, blocker = ?
          WHERE execution_key = ?`,
       )
       .run(
@@ -205,6 +219,7 @@ export class SqliteApprovalStore implements ApprovalStore {
         result.settledAt,
         result.providerRef ?? null,
         result.failure ?? null,
+        result.blocker ?? null,
         executionKey,
       );
     if (Number(settled.changes) !== 1) {
@@ -299,5 +314,6 @@ function executionRecord(row: ExecutionRow): ExecutionRecord {
     settledAt: row.settled_at === null ? null : Number(row.settled_at),
     providerRef: row.provider_ref,
     failure: row.failure,
+    blocker: row.blocker as ExecutionBlocker | null,
   });
 }

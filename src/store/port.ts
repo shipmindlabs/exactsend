@@ -17,7 +17,18 @@ export class StoreError extends Error {
   }
 }
 
-export type ExecutionState = 'dispatching' | 'sent' | 'failed';
+// 'unknown' is not a failure: the provider answered nothing, so the bytes may or may not be
+// on the wire. 'delivered' is an unknown the provider later confirmed, and 'parked' is one
+// that nothing but a human can resolve.
+export type ExecutionState =
+  | 'dispatching'
+  | 'sent'
+  | 'failed'
+  | 'unknown'
+  | 'delivered'
+  | 'parked';
+
+export type ExecutionBlocker = 'needs-human';
 
 export interface ApprovalRecord {
   readonly approvalId: string;
@@ -40,13 +51,16 @@ export interface ExecutionRecord {
   readonly settledAt: number | null;
   readonly providerRef: string | null;
   readonly failure: string | null;
+  readonly blocker: ExecutionBlocker | null;
 }
 
 export interface DispatchResult {
-  readonly state: 'sent' | 'failed';
-  readonly settledAt: number;
+  readonly state: Exclude<ExecutionState, 'dispatching'>;
+  // Null while the execution is not settled: an unknown or parked row is still open.
+  readonly settledAt: number | null;
   readonly providerRef?: string | null;
   readonly failure?: string | null;
+  readonly blocker?: ExecutionBlocker | null;
 }
 
 export interface ApprovalStore {
@@ -56,7 +70,9 @@ export interface ApprovalStore {
 
   // One step: the approval is marked consumed only where it was not consumed, and the
   // dispatching execution row is written with it. A null return means no row changed, so
-  // the approval was already spent and nothing may be sent.
+  // the approval was already spent and nothing may be sent. Consumption is read before the
+  // execution key, so a second attempt under the derived key reads as already consumed
+  // rather than as a clash with its own first attempt.
   consumeAndRecordIntent(
     approvalId: string,
     executionKey: string,

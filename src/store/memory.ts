@@ -37,15 +37,17 @@ export class MemoryApprovalStore implements ApprovalStore {
     now: number,
   ): Promise<ExecutionRecord | null> {
     const approval = this.#approval(approvalId);
+    // Consumption is read first: the key is derived from the approval, so a second attempt
+    // carries the key of the first one and has to read as already consumed.
+    if (approval.consumedAt !== null) {
+      return null;
+    }
     if (this.#executions.has(executionKey)) {
       throw new StoreError(
         'duplicate-execution-key',
         executionKey,
         'an execution with this key is already recorded',
       );
-    }
-    if (approval.consumedAt !== null) {
-      return null;
     }
 
     const execution: ExecutionRecord = Object.freeze({
@@ -57,6 +59,7 @@ export class MemoryApprovalStore implements ApprovalStore {
       settledAt: null,
       providerRef: null,
       failure: null,
+      blocker: null,
     });
     this.#approvals.set(
       approvalId,
@@ -77,6 +80,7 @@ export class MemoryApprovalStore implements ApprovalStore {
       settledAt: result.settledAt,
       providerRef: result.providerRef ?? null,
       failure: result.failure ?? null,
+      blocker: result.blocker ?? null,
     });
     this.#executions.set(executionKey, next);
     return next;
