@@ -11,9 +11,9 @@ rest of the flow refers to that digest.
 ## Status
 
 This phase ships the action digest, the action type registry, proposals that hold the rendered wire
-bytes, the approval decision itself, the adapters that render and send, and single-use consumption
-at execution time, in memory or on `node:sqlite`. Reconciliation with the provider before a retry is
-not implemented yet.
+bytes, the approval decision itself, the adapters that render and send, single-use consumption at
+execution time, in memory or on `node:sqlite`, and reconciliation with the provider before any
+retry.
 
 ## Usage
 
@@ -151,9 +151,9 @@ handed the approved bytes and the key to send them under.
 
 `honoursIdempotencyKey` is a claim about the provider, not about the header: sending an
 `Idempotency-Key` is not the same as the endpoint deduplicating on it, so the claim belongs to
-whoever knows the endpoint. Later phases read it to decide whether a retry under the same execution
-key is safe or has to be reconciled first. `queryStatus` answers `sent`, `not-sent` or `unknown`,
-and `unknown` is an honest answer a provider is allowed to give.
+whoever knows the endpoint. Reconciliation reads it to decide whether a retry under the same
+execution key is safe or has to be asked about first. `queryStatus` answers `sent`, `not-sent` or
+`unknown`, and `unknown` is an honest answer a provider is allowed to give.
 
 `emailAdapter({ provider, template })` renders a template to UTF-8 bytes and delivers them with the
 execution key as the provider's idempotency key. `FakeEmailProvider` is that provider in memory: it
@@ -301,7 +301,7 @@ const executor = new Executor(registry, proposals, store);
 const execution = await executor.execute(approvalId);
 
 execution.executionKey; // the key the provider call carried, stable for reconciliation
-execution.state; // 'sent' or 'failed'
+execution.state; // 'sent', 'failed' or 'unknown'
 execution.providerRef; // whatever the adapter returned to name the send
 ```
 
@@ -313,6 +313,70 @@ result is written as a second step, so a crash in between leaves a row in `dispa
 state, because the bytes may or may not be on the wire and only reconciliation with the provider can
 tell. A provider error is recorded as `failed` for the same reason instead of being thrown back as
 something to retry: the approval stays consumed.
+
+### The execution key
+
+The execution key is not drawn at random. It is the hex SHA-256 of `exactsend/exec/v1\n` followed by
+the approval id, so an execution that crashed between the commit and the result reuses exactly the
+key the provider already saw, and two approvals can never share one:
+
+```ts
+import { executionKeyFor } from 'exactsend';
+
+await executionKeyFor(approvalId); // 64 lowercase hex characters, the same on every attempt
+```
+
+Because consumption is read before the key, a second `execute` on one approval reads as
+`already-consumed` rather than as a clash with its own first attempt.
+
+### A timeout is unknown, not failed
+
+A provider that refuses said something: nothing landed. A provider that ran out of time said
+nothing at all, so the bytes may already be on its side. Those are different facts, and the
+execution row keeps them apart.
+
+An adapter reports the second one by throwing `SendTimeoutError`. A `TimeoutError`, an `AbortError`
+and the usual socket codes (`ETIMEDOUT`, `UND_ERR_HEADERS_TIMEOUT` and friends) are read the same
+way. It is recognised by shape, never by wording: an ordinary `Error` whose message happens to
+mention a timeout is a failure like any other, because nothing about it says the bytes might have
+landed.
+
+| state | what it means |
+| --- | --- |
+| `dispatching` | the row is committed and the provider call has not come back |
+| `sent` | the provider answered, and `providerRef` names the send |
+| `failed` | the provider refused, so nothing is on its side |
+| `unknown` | the call ran out of time, so the bytes may or may not have landed |
+| `delivered` | an `unknown` a status query later confirmed |
+| `parked` | an `unknown` nothing but a human can resolve; `blocker` is `needs-human` |
+
+`settledAt` stays null for `dispatching`, `unknown` and `parked`: the execution is still open.
+
+### Reconciliation before any retry
+
+`resume(executionKey)` finishes an execution the provider never answered for. A resend is only one
+of the three ways out, and never the first thing tried unless the provider deduplicates:
+
+```ts
+const unknown = await executor.execute(approvalId); // state 'unknown', settledAt null
+const resolved = await executor.resume(unknown.executionKey);
+```
+
+- An adapter that claims `honoursIdempotencyKey` is resent under the same execution key. The
+  provider recognises the key and answers with the reference it already gave, so a delivery that
+  landed is not repeated.
+- Otherwise the provider is asked first. `sent` records `delivered` with the reference it names and
+  sends nothing. `unknown` parks the row, because a resend could be a second delivery. `not-sent` is
+  the only definite answer that lets the approved bytes go out again.
+- An adapter with neither capability parks the row straight away: there is no way to tell, and
+  guessing is a duplicate send or a lost one.
+
+A `queryStatus` that cannot be reached refuses with `status-unavailable` and leaves the row
+`unknown`, so it can be asked again later. Nothing was learned, so nothing is written.
+
+A parked row carries `blocker: 'needs-human'` and the original timeout message alongside the reason
+it was parked. It is settled as far as `resume` is concerned: asking again refuses `not-resumable`,
+which is also what a `sent`, `failed` or `delivered` row answers.
 
 ### Stores
 
@@ -330,8 +394,8 @@ store.close();
 
 A numbered migration creates `proposals`, `revisions`, `approvals`, `executions` and `blockers`, and
 records itself in a `migrations` table, so reopening a file applies nothing twice. This phase writes
-approvals and executions only; the other tables are there for the proposals and the reconciliation
-that later phases persist.
+approvals and executions only; the other tables are there for the proposals that later phases
+persist.
 
 Consumption is one `BEGIN IMMEDIATE` transaction: the `UPDATE` that marks the approval consumed has
 to change exactly one row, the execution row is inserted with it, and any error rolls the whole
@@ -350,6 +414,8 @@ Refusals throw `ExecuteError` with a `code` and the `path` of the offending valu
 | `render-drift` | a draft that no longer renders to the approved digest |
 | `already-consumed` | an approval an execution already spent |
 | `unknown-revision` | an approval naming a revision the proposal does not hold |
+| `not-resumable` | an execution that is settled or parked, so nothing is left to resolve |
+| `status-unavailable` | a provider that could not be asked, leaving the row `unknown` |
 
 The store refuses with `StoreError`: `unknown-approval` for an id it does not hold,
 `unknown-execution` for an unknown execution key, and `duplicate-execution-key` for a key it has
